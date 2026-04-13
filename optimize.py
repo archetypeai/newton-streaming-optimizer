@@ -554,6 +554,8 @@ Examples:
         """,
     )
 
+    global WINDOWS_PER_CONFIG, PROBE_TIMEOUT_SEC
+
     # Required arguments
     parser.add_argument("--inference-file", required=True, help="Path to inference CSV file")
     parser.add_argument("--n-shot-files", nargs="+", required=True, help="Paths to n-shot CSV files (one per class)")
@@ -584,7 +586,6 @@ Examples:
     if len(args.n_shot_files) != len(args.class_names):
         parser.error("Number of --n-shot-files must match --class-names")
 
-    global WINDOWS_PER_CONFIG, PROBE_TIMEOUT_SEC
     WINDOWS_PER_CONFIG = args.windows_per_config
     PROBE_TIMEOUT_SEC = args.probe_timeout
 
