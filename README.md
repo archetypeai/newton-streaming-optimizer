@@ -218,11 +218,11 @@ Ready-to-use lens config for the Newton streaming API:
 
 ## Bundled Example: Drilling
 
-`examples/drilling/` was generated from the [Volve dataset](https://www.equinor.com/energy/volve-data-sharing) (7.3M labeled rows) using:
+`examples/drilling/` was generated from the [Volve dataset](https://www.equinor.com/energy/volve-data-sharing) (7.3M labeled rows). The source `volve_raw_labeled.csv` ships via Git LFS with [archetype-batch-examples](https://github.com/archetypeai/archetype-batch-examples) — clone it alongside this repo and run:
 
 ```bash
 python prep_data.py \
-    --input-file volve_raw_labeled.csv \
+    --input-file ../archetype-batch-examples/data/volve_raw_labeled.csv \
     --output-dir examples/drilling \
     --data-columns BPOS DBTM FLWI HDTH HKLD ROP RPM SPPA WOB \
     --timestamp-column DATE_TIME \
