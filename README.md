@@ -226,7 +226,7 @@ python prep_data.py \
 
 ## Data Attribution
 
-The drilling sensor data in [`examples/drilling/`](examples/drilling) is from the **Equinor Volve Data Village**, released under a modified CC BY 4.0 license. The data may be used for commercial and non-commercial purposes but may not be resold. The bundled files were generated from `volve_raw_labeled.csv` (see [archetype-batch-examples](https://github.com/archetypeai/archetype-batch-examples) for the source-CSV build pipeline) by running [`prep_data.py`](prep_data.py) to extract a 200,000-row balanced inference slice and 2,000-row n-shot examples per class.
+The drilling sensor data used in these examples is from the **Equinor Volve Data Village**, released under a modified CC BY 4.0 license. The data may be used for commercial and non-commercial purposes but may not be resold.
 
 > Data provided by Equinor and the former Volve license partners (ExxonMobil Exploration & Production Norway AS and Bayerngas Norge AS). [Terms and Conditions](https://www.equinor.com/energy/volve-data-sharing).
 
