@@ -19,8 +19,20 @@ labeled CSV  ──►  prep_data.py  ──►  inference.csv + nshot_<class>.c
 ## Setup
 
 ```bash
+# Create a virtual environment
+python3 -m venv myenv
+
+# Activate it
+source myenv/bin/activate
+
+# Install dependencies
 pip install -r requirements.txt
+
+# Configure API key
 export ATAI_API_KEY=your_api_key_here
+
+# Deactivate when done
+deactivate
 ```
 
 ## Quick Start
