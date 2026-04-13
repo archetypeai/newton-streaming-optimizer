@@ -41,7 +41,7 @@ GRID = {
     "weights": ["uniform", "distance"],
 }
 
-WINDOWS_PER_CONFIG = 40
+WINDOWS_PER_CONFIG = 100
 PROBE_TIMEOUT_SEC = 90
 STREAM_DELAY_SEC = 1.0
 

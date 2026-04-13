@@ -11,7 +11,7 @@ Grid-search optimizer for [Newton](https://www.archetypeai.dev/) Machine State L
 3. **For each config combination:**
    - Creates a Machine State Lens session
    - Sends a probe window and waits for warm-up (~60-90s per session)
-   - Streams 40 inference windows at 1s intervals
+   - Streams 100 inference windows at 1s intervals
    - Collects predictions via SSE
    - Compares against ground truth (unanimous windows only)
    - Computes F1 score, precision, recall per class
@@ -153,7 +153,7 @@ Ready-to-use lens config for the Newton streaming API:
 | `--api-endpoint` | No | `https://api.u1.archetypeai.app` | API endpoint |
 | `--output` | No | `optimizer_results.json` | Full results output file |
 | `--config-output` | No | `best_config.json` | Best config output file |
-| `--windows-per-config` | No | 40 | Inference windows per config |
+| `--windows-per-config` | No | 100 | Inference windows per config |
 | `--probe-timeout` | No | 90 | Probe warm-up timeout (seconds) |
 
 ## Comparison: Streaming vs Batch Optimization
@@ -161,7 +161,7 @@ Ready-to-use lens config for the Newton streaming API:
 | | This Tool (Streaming) | [Batch Optimizer](https://github.com/archetypeai/archetype-batch-examples#7-config-optimization) |
 |---|---|---|
 | **API** | Lens session + SSE | Batch job API |
-| **Speed** | ~100s per config (live) | Minutes per config (async) |
+| **Speed** | ~3 min per config (live) | Minutes per config (async) |
 | **Model** | `omega_embeddings_01` | `omega_1_3_surface` |
 | **Warm-up** | ~60-90s per session | None (batch processed) |
 | **Data flow** | Stream windows in real-time | Upload full file, process server-side |
@@ -170,5 +170,5 @@ Ready-to-use lens config for the Newton streaming API:
 ## Known Limitations
 
 - **Generic encoder**: `omega_embeddings_01` may not produce discriminative embeddings for all domains. Domain-specific encoders (like `omega_1_3_surface` for drilling) significantly improve accuracy but are currently only available for batch processing.
-- **Session cold start**: Each config requires ~60-90s for Newton to process n-shot examples. For 54 configs, total runtime is ~90 minutes.
+- **Session cold start**: Each config requires ~60-90s for Newton to process n-shot examples. For 54 configs, total runtime is ~3 hours.
 - **SSE reliability**: Long-running optimizations may experience SSE disconnections. The script handles reconnection but some windows may be lost.
