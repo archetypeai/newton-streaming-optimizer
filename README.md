@@ -7,12 +7,13 @@ Grid-search optimizer for [Newton](https://www.archetypeai.dev/) Machine State L
 ## Workflow
 
 ```
-labeled CSV  ──►  prep_data.py  ──►  inference.csv + nshot_<class>.csv  ──►  optimize.py  ──►  best_config.json
+labeled CSV  ──►  prep_data.py  ──►  inference.csv + nshot_<class>.csv  ──►  optimize.py  ──►  best_config.json  ──►  classify.py  ──►  predictions.csv
 ```
 
 1. **Bring a labeled time-series CSV** — one row per sample, one column with the ground-truth class label.
 2. **Run `prep_data.py`** to split it into n-shot files (one per class) and a balanced inference file.
 3. **Run `optimize.py`** to grid-search KNN configs and pick the best one by F1.
+4. **Run `classify.py`** with the winning `best_config.json` to classify any new (unlabeled or labeled) CSV.
 
 > **No labeled data?** Skip step 2 — pre-prepared drilling examples live in [`examples/drilling/`](examples/drilling) (derived from the [Volve dataset](https://www.equinor.com/energy/volve-data-sharing)). Jump straight to [Quick Start](#quick-start).
 
@@ -96,6 +97,41 @@ python optimize.py \
     --probe-timeout 120
 ```
 
+### Step 3 — Classify new data with the winning config
+
+Once `optimize.py` writes `best_config.json`, use `classify.py` to apply it to any CSV:
+
+```bash
+python classify.py \
+    --config-file best_config.json \
+    --n-shot-files data/prepared/nshot_drilling.csv data/prepared/nshot_not_drilling.csv \
+    --class-names drilling not_drilling \
+    --inference-file data/full_well.csv \
+    --output predictions.csv
+```
+
+If your inference CSV has ground-truth labels, add `--label-column` and `classify.py` will print evaluation metrics (F1, precision, recall, confusion matrix) at the end:
+
+```bash
+python classify.py \
+    --config-file best_config.json \
+    --n-shot-files data/prepared/nshot_drilling.csv data/prepared/nshot_not_drilling.csv \
+    --class-names drilling not_drilling \
+    --inference-file data/labeled_well.csv \
+    --label-column label \
+    --output predictions.csv
+```
+
+Output (`predictions.csv`):
+
+```csv
+window_index,DATE_TIME,prediction,ground_truth
+0,1182186370,not_drilling,not_drilling
+1,1182186402,not_drilling,not_drilling
+2,1182186434,drilling,drilling
+...
+```
+
 ## How It Works
 
 **`prep_data.py`** does a single streaming pass over your labeled CSV:
@@ -111,11 +147,17 @@ python optimize.py \
 3. For each config combination:
    - Creates a Machine State Lens session
    - Sends a probe window and waits for warm-up (~60-90s)
-   - Streams 100 inference windows at 1s intervals, collecting predictions via SSE
-   - Compares against ground truth (unanimous windows only)
-   - Computes F1, precision, recall per class
-4. Ranks all configs by macro F1 score
-5. Writes the best config as a ready-to-use lens config JSON
+   - Streams windows, collects predictions via SSE
+   - Compares against ground truth (unanimous windows only) for F1
+4. Writes `optimizer_results.json` (full leaderboard) and `best_config.json` (top result, lens-API-ready)
+
+**`classify.py`** runs a single Machine State Lens session using a saved config:
+
+1. Loads `best_config.json` (or any compatible lens config JSON)
+2. Uploads n-shot files
+3. Streams the inference CSV through Newton in `window_size`-sized windows
+4. Writes `predictions.csv` with `window_index`, optional timestamp, and predicted class
+5. If `--label-column` is supplied, also prints macro F1 + per-class precision/recall
 
 ## Parameter Grid
 
@@ -195,6 +237,24 @@ Ready-to-use lens config for the Newton streaming API:
 | `--classes` | No | all found | Limit to these class names (after mapping) |
 | `--n-shot-size` | No | 2000 | Rows per n-shot file |
 | `--inference-size` | No | 200000 | Rows in the inference slice (headroom for window sizes up to 1024) |
+
+### `classify.py`
+
+| Flag | Required | Default | Description |
+|------|----------|---------|-------------|
+| `--config-file` | Yes | — | Lens config JSON (`best_config.json` from `optimize.py`) |
+| `--n-shot-files` | Yes | — | One CSV per class |
+| `--class-names` | Yes | — | Class names matching n-shot files |
+| `--inference-file` | Yes | — | CSV to classify |
+| `--data-columns` | No | from config | Override data columns |
+| `--timestamp-column` | No | from config | Override timestamp column |
+| `--label-column` | No | — | Optional ground-truth column for evaluation |
+| `--output` | No | `predictions.csv` | Output CSV path |
+| `--api-key` | No | `$ATAI_API_KEY` | API key |
+| `--api-endpoint` | No | `https://api.u1.archetypeai.app` | API endpoint |
+| `--probe-timeout` | No | 90 | Probe warm-up timeout (seconds) |
+| `--stream-delay` | No | 0.5 | Delay between window sends (seconds) |
+| `--max-windows` | No | whole file | Stop after this many windows |
 
 ### `optimize.py`
 
