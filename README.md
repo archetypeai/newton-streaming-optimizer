@@ -150,6 +150,18 @@ window_index,DATE_TIME,prediction,ground_truth
 ...
 ```
 
+Console summary (when `--label-column` is supplied) — example from running against the bundled `examples/drilling/inference.csv` (1,562 windows × 128 samples):
+
+```
+Evaluation (1,465 unanimous-window pairs):
+  macro F1: 94.6%
+  accuracy: 94.6%
+  drilling:     P=91.1% R=98.1% F1=94.4% (TP=672 FP=66 FN=13)
+  not_drilling: P=98.2% R=91.5% F1=94.8% (TP=714 FP=13 FN=66)
+```
+
+> Note: this is a more realistic accuracy estimate than the optimizer's headline 100% — the optimizer evaluates 100 windows against the most-balanced section it can find, while `classify.py` here scores 1,465 unanimous windows across the full 200K-row inference file. F1 ≈ 95% over a much broader and more varied evaluation is the number to plan around.
+
 ## How It Works
 
 **`prep_data.py`** does a single streaming pass over your labeled CSV:
