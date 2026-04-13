@@ -226,15 +226,9 @@ python prep_data.py \
 
 ## Data Attribution
 
-The bundled drilling examples in [`examples/drilling/`](examples/drilling) are derived from the **Volve field dataset**, released by Equinor in 2018 for research and educational use.
+The drilling sensor data in [`examples/drilling/`](examples/drilling) is from the **Equinor Volve Data Village**, released under a modified CC BY 4.0 license. The data may be used for commercial and non-commercial purposes but may not be resold. The bundled files were generated from `volve_raw_labeled.csv` (see [archetype-batch-examples](https://github.com/archetypeai/archetype-batch-examples) for the source-CSV build pipeline) by running [`prep_data.py`](prep_data.py) to extract a 200,000-row balanced inference slice and 2,000-row n-shot examples per class.
 
-- **Source**: [Equinor Volve Data Village](https://www.equinor.com/energy/volve-data-sharing)
-- **Operators**: Equinor (operator) with Volve license partners ExxonMobil E&P Norway AS and Bayerngas Norge AS
-- **License**: Equinor's [Volve data sharing license](https://cdn.sanity.io/files/h61q9gi9/global/de6532f6134b9a953f6c41bac47a0c055a3712d3.pdf) — free to use, redistribute, and modify; **must cite Equinor and the Volve license partners as the source.**
-- **Original data**: Multivariate drilling sensor channels (`BPOS, DBTM, FLWI, HDTH, HKLD, ROP, RPM, SPPA, WOB`) sampled at 1 Hz across multiple Volve wells.
-- **What we did**: Concatenated raw well logs into a single labeled CSV, mapped the original `ACTC` activity codes to a binary `drilling` / `not_drilling` label, then ran [`prep_data.py`](prep_data.py) to extract a 200,000-row balanced inference slice and 2,000-row n-shot examples per class.
-
-> *Data made available by the operator Equinor and the Volve license partners ExxonMobil E&P Norway AS and Bayerngas Norge AS, in accordance with the Volve data sharing license.*
+> Data provided by Equinor and the former Volve license partners (ExxonMobil Exploration & Production Norway AS and Bayerngas Norge AS). [Terms and Conditions](https://www.equinor.com/energy/volve-data-sharing).
 
 ## Comparison: Streaming vs Batch Optimization
 
