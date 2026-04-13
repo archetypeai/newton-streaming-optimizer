@@ -504,23 +504,21 @@ def run_optimizer(args):
                 args.data_columns, args.timestamp_column,
             )
 
-            # Open one persistent SSE connection for the whole session
+            # Open one persistent SSE connection for the whole session.
+            # Sleep briefly so the SSE GET actually establishes before we start
+            # sending data; otherwise early predictions can be lost.
             reader = SSEReader(sse_url, api_key)
             reader.start()
+            time.sleep(2)
 
-            # Send probe and wait for first result (warm-up)
-            print("  Warming up (probe)...")
-            probe_data = transpose_window(rows, offset, config["window_size"], args.data_columns)
-            stream_window(endpoint, api_key, session_id, probe_data, 0)
-
-            first = reader.wait_for_first(PROBE_TIMEOUT_SEC)
-            if first is None:
-                print(f"  Warm-up timed out after {PROBE_TIMEOUT_SEC}s")
-            else:
-                print(f"  Warm-up complete: {first}")
-                reader.drain()  # discard probe result
-
-            # Stream inference windows; ground truth queue pairs with predictions FIFO
+            # NOTE: We deliberately do NOT send a probe-then-wait warm-up here.
+            # Empirically (see diagnose_w64.py / diagnose_w128.py), Newton needs
+            # *continuous* incoming data to begin firing predictions — it doesn't
+            # respond to a single probe window followed by silence. The probe
+            # warm-up worked accidentally at w32 (the burst was enough) but
+            # produced 0 predictions at w64+. Just stream all inference windows
+            # back-to-back; the first ~10-15 windows act as the warm-up and
+            # predictions start flowing around t+10-20s.
             print(f"  Streaming {WINDOWS_PER_CONFIG} windows...")
             predictions = []
             ground_truths = []
