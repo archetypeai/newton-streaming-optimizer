@@ -68,7 +68,15 @@ python classify.py \
     --output predictions.csv
 ```
 
-Writes `predictions.csv` and prints macro F1 + per-class precision/recall at the end (the bundled inference file is labeled, so evaluation kicks in automatically).
+Writes `predictions.csv` and prints macro F1 + per-class precision/recall at the end (the bundled inference file is labeled, so evaluation kicks in automatically). Real output from this exact command:
+
+```
+Evaluation (1,465 unanimous-window pairs):
+  macro F1: 94.6%
+  accuracy: 94.6%
+  drilling:     P=91.1% R=98.1% F1=94.4% (TP=672 FP=66 FN=13)
+  not_drilling: P=98.2% R=91.5% F1=94.8% (TP=714 FP=13 FN=66)
+```
 
 ## Use Your Own Data
 
