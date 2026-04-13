@@ -89,7 +89,7 @@ def main():
     p.add_argument("--output", default="predictions.csv", help="Output CSV path (default: predictions.csv)")
     p.add_argument("--api-key", help="Archetype AI API key (or set ATAI_API_KEY env var)")
     p.add_argument("--api-endpoint", default=DEFAULT_ENDPOINT, help=f"API endpoint (default: {DEFAULT_ENDPOINT})")
-    p.add_argument("--probe-timeout", type=int, default=90, help="Probe warm-up timeout seconds (default: 90)")
+    p.add_argument("--settle-sec", type=int, default=60, help="Seconds to sleep after probe so Newton's KNN index loads (default: 60)")
     p.add_argument("--stream-delay", type=float, default=0.5, help="Delay between window sends (default: 0.5s)")
     p.add_argument("--max-windows", type=int, help="Stop after this many windows (default: process whole file)")
     args = p.parse_args()
@@ -152,17 +152,17 @@ def main():
 
         reader = SSEReader(sse_url, api_key)
         reader.start()
+        time.sleep(2)  # let SSE GET actually establish before sending data
 
-        # Probe + warm-up
-        print("Warming up (probe)...")
+        # Probe + settle: send one window to wake Newton's input pipeline,
+        # then sleep so its KNN index finishes building from the n-shot files.
+        # Without this, predictions never start arriving (Newton silently
+        # accepts streamed windows but the classifier head isn't ready).
+        print(f"Sending probe + settling for {args.settle_sec}s (KNN index)...")
         probe_data = transpose_window(rows, 0, window_size, data_columns)
         stream_window(args.api_endpoint, api_key, session_id, probe_data, 0)
-        first = reader.wait_for_first(args.probe_timeout)
-        if first is None:
-            print(f"  Warm-up timed out after {args.probe_timeout}s; continuing anyway")
-        else:
-            print(f"  Warm-up complete: {first}")
-            reader.drain()
+        time.sleep(args.settle_sec)
+        reader.drain()  # discard any probe-era predictions
 
         # Stream windows
         print(f"\nStreaming up to {max_windows:,} windows (step={step_size})...")
