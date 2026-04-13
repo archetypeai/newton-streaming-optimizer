@@ -413,6 +413,11 @@ def run_optimizer(args):
         grid_values[grid_keys.index("metric")] = args.metrics
 
     configs = [dict(zip(grid_keys, combo)) for combo in product(*grid_values)]
+    # Run 'uniform' before 'distance' for each (window, k, metric) so we can detect
+    # when distance weighting is a no-op and skip duplicate API calls.
+    weights_order = {"uniform": 0, "distance": 1}
+    configs.sort(key=lambda c: (c["window_size"], c["n_neighbors"], c["metric"],
+                                weights_order.get(c["weights"], 99)))
     total = len(configs)
     print(f"\nGrid search: {total} configurations")
     print(f"  window_size: {GRID['window_size']}")
@@ -427,9 +432,39 @@ def run_optimizer(args):
 
     results = []
 
+    # Track when weights=distance is a known no-op for a given metric so we can
+    # skip the redundant API run. Confirmed after 3 consecutive (window, k) pairs
+    # produce identical uniform/distance predictions for that metric.
+    NOOP_CONFIRM_THRESHOLD = 3
+    weights_noop = {m: {"matches": 0, "mismatched": False, "confirmed": False}
+                    for m in GRID["metric"]}
+    uniform_cache = {}  # (window_size, n_neighbors, metric) -> {predictions, gts, metrics, scored, offset, mix}
+
     for idx, config in enumerate(configs):
         label = f"w{config['window_size']} k{config['n_neighbors']} {config['metric'][:3]} {config['weights'][:4]}"
         print(f"[{idx+1}/{total}] {label}")
+
+        # Skip weights=distance when uniform has been confirmed identical for this metric.
+        # Reuse uniform's predictions so the leaderboard still shows the config.
+        cache_key = (config["window_size"], config["n_neighbors"], config["metric"])
+        if config["weights"] == "distance" and weights_noop[config["metric"]]["confirmed"]:
+            cached = uniform_cache.get(cache_key)
+            if cached:
+                print(f"  Skipping API call: weights=distance is a no-op for metric={config['metric']} "
+                      f"(confirmed by {NOOP_CONFIRM_THRESHOLD} prior pairs). Reusing uniform result.")
+                print(f"  Results: F1={cached['metrics']['macro_f1']*100:.1f}% "
+                      f"Acc={cached['metrics']['accuracy']*100:.1f}% ({cached['scored']} scored windows)")
+                results.append({
+                    "config": config,
+                    "label": label,
+                    "metrics": cached["metrics"],
+                    "scored_windows": cached["scored"],
+                    "offset": cached["offset"],
+                    "mix": cached["mix"],
+                    "weights_noop_skipped": True,
+                })
+                print()
+                continue
 
         # Find mixed offset for this window size
         offset, mix = find_mixed_offset(rows, args.label_column, class_names, config["window_size"])
@@ -504,6 +539,28 @@ def run_optimizer(args):
             else:
                 metrics = {"macro_f1": 0, "accuracy": 0, "per_class": {}}
                 print("  No results received")
+
+            # Track uniform/distance equivalence per metric
+            if config["weights"] == "uniform":
+                uniform_cache[cache_key] = {
+                    "predictions": list(predictions),
+                    "metrics": metrics,
+                    "scored": len(predictions),
+                    "offset": offset,
+                    "mix": mix,
+                }
+            elif config["weights"] == "distance" and predictions:
+                cached = uniform_cache.get(cache_key)
+                if cached and cached["predictions"] == predictions:
+                    state = weights_noop[config["metric"]]
+                    if not state["mismatched"]:
+                        state["matches"] += 1
+                        if state["matches"] >= NOOP_CONFIRM_THRESHOLD and not state["confirmed"]:
+                            state["confirmed"] = True
+                            print(f"  → weights=distance confirmed no-op for metric={config['metric']}; "
+                                  f"future distance configs for this metric will be skipped.")
+                elif cached:
+                    weights_noop[config["metric"]]["mismatched"] = True
 
             results.append({
                 "config": config,
