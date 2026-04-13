@@ -413,10 +413,11 @@ def run_optimizer(args):
         grid_values[grid_keys.index("metric")] = args.metrics
 
     configs = [dict(zip(grid_keys, combo)) for combo in product(*grid_values)]
-    # Run 'uniform' before 'distance' for each (window, k, metric) so we can detect
-    # when distance weighting is a no-op and skip duplicate API calls.
+    # Largest window_size first so we see the most promising (and most timing-
+    # sensitive) configs early. Within each window: 'uniform' before 'distance'
+    # for the no-op detector to work.
     weights_order = {"uniform": 0, "distance": 1}
-    configs.sort(key=lambda c: (c["window_size"], c["n_neighbors"], c["metric"],
+    configs.sort(key=lambda c: (-c["window_size"], c["n_neighbors"], c["metric"],
                                 weights_order.get(c["weights"], 99)))
     total = len(configs)
     print(f"\nGrid search: {total} configurations")
