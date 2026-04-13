@@ -38,7 +38,9 @@ deactivate
 
 ## Quick Start
 
-Run the optimizer against the bundled drilling example — no data prep required:
+No data prep required — both commands below use the bundled drilling example in [`examples/drilling/`](examples/drilling).
+
+### Find the best config
 
 ```bash
 python optimize.py \
@@ -50,7 +52,23 @@ python optimize.py \
     --label-column label
 ```
 
-This searches the default 54-config grid (~90 min) and writes `optimizer_results.json` + `best_config.json`.
+Searches the default 54-config grid and writes `optimizer_results.json` + `best_config.json`. Runtime varies — small grids and dead-metric / weights no-op auto-skipping typically bring it to ~30–40 minutes.
+
+### Classify with the winning config
+
+Once `best_config.json` exists, run `classify.py` against the same example data to see it in action end-to-end:
+
+```bash
+python classify.py \
+    --config-file best_config.json \
+    --n-shot-files examples/drilling/nshot_drilling.csv examples/drilling/nshot_not_drilling.csv \
+    --class-names drilling not_drilling \
+    --inference-file examples/drilling/inference.csv \
+    --label-column label \
+    --output predictions.csv
+```
+
+Writes `predictions.csv` and prints macro F1 + per-class precision/recall at the end (the bundled inference file is labeled, so evaluation kicks in automatically).
 
 ## Use Your Own Data
 
