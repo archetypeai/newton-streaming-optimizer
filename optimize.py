@@ -51,7 +51,7 @@ GRID = {
 WINDOWS_PER_CONFIG = 100
 PROBE_TIMEOUT_SEC = 90  # legacy; kept for CLI back-compat, no longer used
 STREAM_DELAY_SEC = 1.0
-SETTLE_SEC = 15  # probe + sleep before the main stream so Newton's KNN index loads
+SETTLE_SEC = 60  # probe + sleep before the main stream so Newton's KNN index loads
 
 
 # --- API Helpers ---
@@ -556,9 +556,9 @@ def run_optimizer(args):
             # Drain trailing results. Larger windows take longer for Newton to
             # warm up, so the cap scales with window_size. We also bail early
             # when no new predictions have arrived for several seconds.
-            max_drain_sec = max(15, config["window_size"])
+            max_drain_sec = max(30, config["window_size"])
             no_new_streak = 0
-            NO_NEW_BAIL = 5
+            NO_NEW_BAIL = 15
             prev_count = len(predictions)
             deadline = time.time() + max_drain_sec
             drain_started = time.time()
