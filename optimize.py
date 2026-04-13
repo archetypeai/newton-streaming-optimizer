@@ -658,8 +658,22 @@ def run_optimizer(args):
         print(f"  {i+1:2d}. F1: {f1:5.1f}%  Acc: {acc:5.1f}%  {r['label']:30s}  ({r['scored_windows']}w)")
     print()
 
-    # Best config
-    best = results[0]
+    # Bail out without writing files if no config produced any predictions —
+    # otherwise the "best" defaults to whatever sorted first, and we'd overwrite
+    # a previously-good best_config.json with garbage.
+    successful = [r for r in results if r["scored_windows"] > 0]
+    if not successful:
+        print("No configurations returned any predictions. Likely causes:", file=sys.stderr)
+        print("  - Newton API outage (check for 5xx errors above)", file=sys.stderr)
+        print("  - Network/auth issue", file=sys.stderr)
+        print("  - All metrics in the grid are unsupported on this encoder", file=sys.stderr)
+        print("Skipping write of optimizer_results.json and best_config.json "
+              "to preserve previous outputs.", file=sys.stderr)
+        sys.exit(2)
+
+    # Best config (from successful runs only — defensive even though `results`
+    # is already F1-sorted, in case future ranking changes break the invariant)
+    best = successful[0]
     print("BEST CONFIG:")
     print(json.dumps(best["config"], indent=2))
     print(f"F1: {best['metrics']['macro_f1']*100:.1f}%  Accuracy: {best['metrics']['accuracy']*100:.1f}%")
