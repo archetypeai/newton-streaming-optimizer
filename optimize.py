@@ -440,9 +440,32 @@ def run_optimizer(args):
                     for m in GRID["metric"]}
     uniform_cache = {}  # (window_size, n_neighbors, metric) -> {predictions, gts, metrics, scored, offset, mix}
 
+    # Track when a metric is silently failing (Newton accepts the config but
+    # never returns predictions). After 3 consecutive zero-result runs with no
+    # successful runs in between, mark the metric "dead" and skip remaining
+    # configs at that metric. Reset if any later run does return predictions.
+    DEAD_METRIC_THRESHOLD = 3
+    metric_dead = {m: {"empty_streak": 0, "dead": False, "had_result": False}
+                   for m in GRID["metric"]}
+
     for idx, config in enumerate(configs):
         label = f"w{config['window_size']} k{config['n_neighbors']} {config['metric'][:3]} {config['weights'][:4]}"
         print(f"[{idx+1}/{total}] {label}")
+
+        # Skip all configs at a metric that has been confirmed dead (Newton
+        # silently returns no predictions for it on this encoder/model).
+        if metric_dead[config["metric"]]["dead"]:
+            print(f"  Skipping API call: metric={config['metric']} is dead "
+                  f"(returned no predictions {DEAD_METRIC_THRESHOLD} times in a row).")
+            results.append({
+                "config": config,
+                "label": label,
+                "metrics": {"macro_f1": 0, "accuracy": 0, "per_class": {}},
+                "scored_windows": 0,
+                "metric_dead_skipped": True,
+            })
+            print()
+            continue
 
         # Skip weights=distance when uniform has been confirmed identical for this metric.
         # Reuse uniform's predictions so the leaderboard still shows the config.
@@ -539,6 +562,21 @@ def run_optimizer(args):
             else:
                 metrics = {"macro_f1": 0, "accuracy": 0, "per_class": {}}
                 print("  No results received")
+
+            # Track per-metric "dead" state (Newton silently returns nothing)
+            mstate = metric_dead[config["metric"]]
+            if predictions:
+                mstate["had_result"] = True
+                mstate["empty_streak"] = 0
+            else:
+                mstate["empty_streak"] += 1
+                if (mstate["empty_streak"] >= DEAD_METRIC_THRESHOLD
+                        and not mstate["had_result"]
+                        and not mstate["dead"]):
+                    mstate["dead"] = True
+                    print(f"  → metric={config['metric']} confirmed dead "
+                          f"({DEAD_METRIC_THRESHOLD} empty runs, no successes); "
+                          f"remaining configs at this metric will be skipped.")
 
             # Track uniform/distance equivalence per metric
             if config["weights"] == "uniform":
