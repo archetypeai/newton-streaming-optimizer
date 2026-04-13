@@ -4,19 +4,106 @@ Grid-search optimizer for [Newton](https://www.archetypeai.dev/) Machine State L
 
 **For batch optimization, see [archetype-batch-examples](https://github.com/archetypeai/archetype-batch-examples#7-config-optimization).**
 
+## Workflow
+
+```
+labeled CSV  ──►  prep_data.py  ──►  inference.csv + nshot_<class>.csv  ──►  optimize.py  ──►  best_config.json
+```
+
+1. **Bring a labeled time-series CSV** — one row per sample, one column with the ground-truth class label.
+2. **Run `prep_data.py`** to split it into n-shot files (one per class) and a balanced inference file.
+3. **Run `optimize.py`** to grid-search KNN configs and pick the best one by F1.
+
+> **No labeled data?** Skip step 2 — pre-prepared drilling examples live in [`examples/drilling/`](examples/drilling) (derived from the [Volve dataset](https://www.equinor.com/energy/volve-data-sharing)). Jump straight to [Quick Start](#quick-start).
+
+## Setup
+
+```bash
+pip install -r requirements.txt
+export ATAI_API_KEY=your_api_key_here
+```
+
+## Quick Start
+
+Run the optimizer against the bundled drilling example — no data prep required:
+
+```bash
+python optimize.py \
+    --inference-file examples/drilling/inference.csv \
+    --n-shot-files examples/drilling/nshot_drilling.csv examples/drilling/nshot_not_drilling.csv \
+    --class-names drilling not_drilling \
+    --data-columns BPOS DBTM FLWI HDTH HKLD ROP RPM SPPA WOB \
+    --timestamp-column DATE_TIME \
+    --label-column label
+```
+
+This searches the default 54-config grid (~90 min) and writes `optimizer_results.json` + `best_config.json`.
+
+## Use Your Own Data
+
+### Step 1 — Prep
+
+```bash
+python prep_data.py \
+    --input-file your_labeled.csv \
+    --output-dir data/prepared \
+    --data-columns sensor_1 sensor_2 sensor_3 \
+    --timestamp-column timestamp \
+    --label-column label
+```
+
+`prep_data.py` picks the **longest contiguous run** of each class for the n-shot files and the **most class-balanced contiguous slice** for the inference file. It prints the exact `optimize.py` command to run next.
+
+If your labels are raw codes that need remapping, use `--label-mapping`:
+
+```bash
+python prep_data.py \
+    --input-file raw.csv \
+    --output-dir data/prepared \
+    --data-columns sensor_1 sensor_2 sensor_3 \
+    --label-column ACTC \
+    --label-mapping "1:DRILLING,2:DRILLING,3:NOT_DRILLING,4:NOT_DRILLING"
+```
+
+### Step 2 — Optimize
+
+Use the command `prep_data.py` printed, or customize the grid:
+
+```bash
+python optimize.py \
+    --inference-file data/prepared/inference.csv \
+    --n-shot-files data/prepared/nshot_healthy.csv data/prepared/nshot_broken.csv \
+    --class-names HEALTHY BROKEN \
+    --data-columns accel_x accel_y accel_z temperature \
+    --timestamp-column ts \
+    --label-column label \
+    --window-sizes 64 128 256 \
+    --k-values 3 5 7 \
+    --metrics euclidean cosine \
+    --windows-per-config 60 \
+    --probe-timeout 120
+```
+
 ## How It Works
 
-1. **Uploads n-shot files** (one CSV per class) — cached across configs
-2. **Finds mixed data sections** in the inference file — ensures balanced ground truth for evaluation
-3. **For each config combination:**
+**`prep_data.py`** does a single streaming pass over your labeled CSV:
+
+1. Scans the label column, applying optional `--label-mapping`
+2. Finds the longest contiguous run of each class → writes `nshot_<class>.csv` (sensor columns only)
+3. Sliding-window search for the most class-balanced contiguous slice → writes `inference.csv` (sensor columns + label)
+
+**`optimize.py`** searches the parameter grid:
+
+1. Uploads n-shot files once — cached across all configs
+2. Finds mixed sections in the inference file for balanced ground-truth evaluation
+3. For each config combination:
    - Creates a Machine State Lens session
-   - Sends a probe window and waits for warm-up (~60-90s per session)
-   - Streams 100 inference windows at 1s intervals
-   - Collects predictions via SSE
+   - Sends a probe window and waits for warm-up (~60-90s)
+   - Streams 100 inference windows at 1s intervals, collecting predictions via SSE
    - Compares against ground truth (unanimous windows only)
-   - Computes F1 score, precision, recall per class
-4. **Ranks all configs by macro F1 score**
-5. **Outputs** best config as a ready-to-use lens config JSON
+   - Computes F1, precision, recall per class
+4. Ranks all configs by macro F1 score
+5. Writes the best config as a ready-to-use lens config JSON
 
 ## Parameter Grid
 
@@ -29,64 +116,9 @@ Grid-search optimizer for [Newton](https://www.archetypeai.dev/) Machine State L
 
 Default grid: 3 × 3 × 3 × 2 = **54 configurations** (~90 min total at ~100s per config).
 
-## Setup
-
-```bash
-pip install -r requirements.txt
-
-# Configure API key
-export ATAI_API_KEY=your_api_key_here
-```
-
-## Usage
-
-### Basic
-
-```bash
-python optimize.py \
-    --inference-file data/inference.csv \
-    --n-shot-files data/class_a.csv data/class_b.csv \
-    --class-names CLASS_A CLASS_B \
-    --data-columns sensor_1 sensor_2 sensor_3 \
-    --timestamp-column timestamp \
-    --label-column label
-```
-
-### Volve Drilling Example
-
-```bash
-python optimize.py \
-    --inference-file /path/to/volve_csv/Norway-StatoilHydro-15_9-F-14.csv \
-    --n-shot-files /path/to/volve_drilling.csv /path/to/volve_not_drilling.csv \
-    --class-names DRILLING NOT_DRILLING \
-    --data-columns BPOS DBTM FLWI HDTH HKLD ROP RPM SPPA WOB \
-    --timestamp-column DATE_TIME \
-    --label-column ACTC_LABEL \
-    --window-sizes 64 128 \
-    --k-values 3 5 \
-    --metrics euclidean manhattan
-```
-
-### Custom Grid
-
-```bash
-python optimize.py \
-    --inference-file data.csv \
-    --n-shot-files healthy.csv broken.csv warning.csv \
-    --class-names HEALTHY BROKEN WARNING \
-    --data-columns accel_x accel_y accel_z temperature \
-    --timestamp-column ts \
-    --label-column state \
-    --window-sizes 64 128 256 512 \
-    --k-values 3 5 7 10 15 \
-    --metrics euclidean cosine \
-    --windows-per-config 60 \
-    --probe-timeout 120
-```
-
 ## Output
 
-### optimizer_results.json
+### `optimizer_results.json`
 
 Full results with all configs ranked by F1:
 
@@ -110,7 +142,7 @@ Full results with all configs ranked by F1:
 }
 ```
 
-### best_config.json
+### `best_config.json`
 
 Ready-to-use lens config for the Newton streaming API:
 
@@ -138,6 +170,22 @@ Ready-to-use lens config for the Newton streaming API:
 
 ## CLI Reference
 
+### `prep_data.py`
+
+| Flag | Required | Default | Description |
+|------|----------|---------|-------------|
+| `--input-file` | Yes | — | Source labeled CSV |
+| `--data-columns` | Yes | — | Sensor column names |
+| `--label-column` | Yes | — | Ground-truth label column |
+| `--output-dir` | No | `prepared_data` | Where to write outputs |
+| `--timestamp-column` | No | — | Optional timestamp column to carry through |
+| `--label-mapping` | No | — | Remap raw labels, e.g. `"1:DRILLING,2:DRILLING,3:NOT_DRILLING"` |
+| `--classes` | No | all found | Limit to these class names (after mapping) |
+| `--n-shot-size` | No | 2000 | Rows per n-shot file |
+| `--inference-size` | No | 200000 | Rows in the inference slice (headroom for window sizes up to 1024) |
+
+### `optimize.py`
+
 | Flag | Required | Default | Description |
 |------|----------|---------|-------------|
 | `--inference-file` | Yes | — | CSV file with sensor data + ground truth labels |
@@ -155,6 +203,38 @@ Ready-to-use lens config for the Newton streaming API:
 | `--config-output` | No | `best_config.json` | Best config output file |
 | `--windows-per-config` | No | 100 | Inference windows per config |
 | `--probe-timeout` | No | 90 | Probe warm-up timeout (seconds) |
+
+## Bundled Example: Drilling
+
+`examples/drilling/` was generated from the [Volve dataset](https://www.equinor.com/energy/volve-data-sharing) (7.3M labeled rows) using:
+
+```bash
+python prep_data.py \
+    --input-file volve_raw_labeled.csv \
+    --output-dir examples/drilling \
+    --data-columns BPOS DBTM FLWI HDTH HKLD ROP RPM SPPA WOB \
+    --timestamp-column DATE_TIME \
+    --label-column label \
+    --classes drilling not_drilling
+```
+
+| File | Rows | Contents |
+|------|------|----------|
+| `inference.csv` | 200,000 | 50% drilling, 50% not_drilling — balanced ground truth |
+| `nshot_drilling.csv` | 2,000 | Sensor-only n-shot examples for the `drilling` class |
+| `nshot_not_drilling.csv` | 2,000 | Sensor-only n-shot examples for the `not_drilling` class |
+
+## Data Attribution
+
+The bundled drilling examples in [`examples/drilling/`](examples/drilling) are derived from the **Volve field dataset**, released by Equinor in 2018 for research and educational use.
+
+- **Source**: [Equinor Volve Data Village](https://www.equinor.com/energy/volve-data-sharing)
+- **Operators**: Equinor (operator) with Volve license partners ExxonMobil E&P Norway AS and Bayerngas Norge AS
+- **License**: Equinor's [Volve data sharing license](https://cdn.sanity.io/files/h61q9gi9/global/de6532f6134b9a953f6c41bac47a0c055a3712d3.pdf) — free to use, redistribute, and modify; **must cite Equinor and the Volve license partners as the source.**
+- **Original data**: Multivariate drilling sensor channels (`BPOS, DBTM, FLWI, HDTH, HKLD, ROP, RPM, SPPA, WOB`) sampled at 1 Hz across multiple Volve wells.
+- **What we did**: Concatenated raw well logs into a single labeled CSV, mapped the original `ACTC` activity codes to a binary `drilling` / `not_drilling` label, then ran [`prep_data.py`](prep_data.py) to extract a 200,000-row balanced inference slice and 2,000-row n-shot examples per class.
+
+> *Data made available by the operator Equinor and the Volve license partners ExxonMobil E&P Norway AS and Bayerngas Norge AS, in accordance with the Volve data sharing license.*
 
 ## Comparison: Streaming vs Batch Optimization
 
