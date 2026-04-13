@@ -164,10 +164,13 @@ window_index,DATE_TIME,prediction,ground_truth
 2. Finds mixed sections in the inference file for balanced ground-truth evaluation
 3. For each config combination:
    - Creates a Machine State Lens session
-   - Sends a probe window and waits for warm-up (~60-90s)
+   - Sends a probe window and sleeps 60s so Newton's KNN index finishes loading
    - Streams windows, collects predictions via SSE
    - Compares against ground truth (unanimous windows only) for F1
-4. Writes `optimizer_results.json` (full leaderboard) and `best_config.json` (top result, lens-API-ready)
+4. Auto-detects and skips dead configs to save time:
+   - **Dead metrics** (3 consecutive empty runs with no prior success) → all remaining configs at that metric short-circuit
+   - **Weights no-op** (3 matching uniform/distance pairs at a metric) → future distance configs at that metric reuse the uniform result
+5. Writes `optimizer_results.json` (full leaderboard) and `best_config.json` (top result, lens-API-ready) — but only if at least one config returned predictions, so an API outage won't clobber prior good outputs
 
 **`classify.py`** runs a single Machine State Lens session using a saved config:
 
@@ -186,28 +189,28 @@ window_index,DATE_TIME,prediction,ground_truth
 | `metric` | euclidean, manhattan, cosine | KNN distance metric |
 | `weights` | uniform, distance | KNN weighting scheme |
 
-Default grid: 3 × 3 × 3 × 2 = **54 configurations** (~90 min total at ~100s per config).
+Default grid: 3 × 3 × 3 × 2 = **54 configurations**. Total runtime depends heavily on which metrics/weights survive auto-skipping. On the bundled drilling example: cosine returns no predictions on `omega_embeddings_01` (all 18 configs auto-skipped after detection), and `weights=distance` is a no-op for euclidean (6 more configs reuse uniform results) — so the effective grid is ~30 active configs at ~120s each ≈ **~60 min**.
 
 ## Output
 
 ### `optimizer_results.json`
 
-Full results with all configs ranked by F1:
+Full results with all configs ranked by F1. Example (real numbers from running on `examples/drilling/`):
 
 ```json
 {
   "best_config": {
     "window_size": 128,
-    "n_neighbors": 5,
+    "n_neighbors": 3,
     "metric": "euclidean",
     "weights": "uniform"
   },
   "best_metrics": {
-    "macro_f1": 0.67,
-    "accuracy": 0.72,
+    "macro_f1": 1.0,
+    "accuracy": 1.0,
     "per_class": {
-      "DRILLING": { "precision": 0.8, "recall": 0.6, "f1": 0.69 },
-      "NOT_DRILLING": { "precision": 0.65, "recall": 0.83, "f1": 0.73 }
+      "drilling":     { "precision": 1.0, "recall": 1.0, "f1": 1.0, "tp": 79, "fp": 0, "fn": 0 },
+      "not_drilling": { "precision": 1.0, "recall": 1.0, "f1": 1.0, "tp": 20, "fp": 0, "fn": 0 }
     }
   },
   "all_results": [ ... ]
@@ -225,13 +228,13 @@ Ready-to-use lens config for the Newton streaming API:
   "normalize_input": true,
   "buffer_size": 128,
   "csv_configs": {
-    "timestamp_column": "timestamp",
-    "data_columns": ["sensor_1", "sensor_2", "sensor_3"],
+    "timestamp_column": "DATE_TIME",
+    "data_columns": ["BPOS", "DBTM", "FLWI", "HDTH", "HKLD", "ROP", "RPM", "SPPA", "WOB"],
     "window_size": 128,
     "step_size": 128
   },
   "knn_configs": {
-    "n_neighbors": 5,
+    "n_neighbors": 3,
     "metric": "euclidean",
     "weights": "uniform",
     "algorithm": "ball_tree",
@@ -314,6 +317,23 @@ python prep_data.py \
 | `nshot_drilling.csv` | 2,000 | Sensor-only n-shot examples for the `drilling` class |
 | `nshot_not_drilling.csv` | 2,000 | Sensor-only n-shot examples for the `not_drilling` class |
 
+### Reference results
+
+Top of the leaderboard from running `optimize.py` against this bundled example (full grid, ~60 min):
+
+| Rank | Config | F1 | Acc |
+|---:|---|---:|---:|
+| 1 | **w128 k3 euc unif** | **100.0%** | **100.0%** |
+| 3 | w64 k3/k5 euc | 97.1% | 97.9-98.0% |
+| 7 | w128 k5 euc | 97.0% | 98.0% |
+| 19 | w64 k3-k7 manhattan | 93.0% | 94.9% |
+| 25 | w32 k3 euc | 85.4% | 88.0% |
+| 37+ | all cosine | 0% | 0% (auto-skipped) |
+
+Patterns: **euclidean > manhattan** consistently (+2-4 F1), **larger window monotonically better** (w32 → w64 → w128 = 85 → 97 → 100), **k=3 best at w128**, **`weights` is effectively a no-op for euclidean**. **Cosine returns no predictions on `omega_embeddings_01`** — likely a platform-level constraint.
+
+> The 100% headline is in-distribution evaluation on the most-balanced section the optimizer could find, scored only on unanimous windows. Real-world per-well numbers will be lower.
+
 ## Data Attribution
 
 The drilling sensor data used in these examples is from the **Equinor Volve Data Village**, released under a modified CC BY 4.0 license. The data may be used for commercial and non-commercial purposes but may not be resold.
@@ -333,6 +353,8 @@ The drilling sensor data used in these examples is from the **Equinor Volve Data
 
 ## Known Limitations
 
-- **Generic encoder**: `omega_embeddings_01` may not produce discriminative embeddings for all domains. Domain-specific encoders (like `omega_1_3_surface` for drilling) significantly improve accuracy but are currently only available for batch processing.
-- **Session cold start**: Each config requires ~60-90s for Newton to process n-shot examples. For 54 configs, total runtime is ~3 hours.
-- **SSE reliability**: Long-running optimizations may experience SSE disconnections. The script handles reconnection but some windows may be lost.
+- **Generic encoder**: `omega_embeddings_01` may not produce discriminative embeddings for all domains. Domain-specific encoders (like `omega_1_3_surface` for drilling) significantly improve accuracy on the broader distribution but are currently only available for batch processing.
+- **Cosine metric returns no predictions on `omega_embeddings_01`**. The optimizer auto-detects this (3 consecutive empty runs at a metric → flagged dead, remaining configs skipped), but be aware that any cosine row in the leaderboard will show F1=0% / 0 windows.
+- **Session settle time**: Each config sleeps 60s after sending a probe so Newton's KNN index finishes building from the n-shot files. Skipping this drops F1 dramatically (~85% → ~50% on the bundled drilling slice). The 60s figure is the empirically-determined floor — going lower hits a half-built index.
+- **In-distribution evaluation**: The optimizer evaluates against a slice of the same labeled CSV used to derive n-shot examples. Real-world performance on different operators / equipment / geologies will be lower than the leaderboard numbers.
+- **SSE reliability**: Long-running optimizations may experience SSE disconnections. The persistent `SSEReader` handles this with a single connection per session, but transient API outages will still abort individual configs.
