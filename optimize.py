@@ -49,8 +49,9 @@ GRID = {
 }
 
 WINDOWS_PER_CONFIG = 100
-PROBE_TIMEOUT_SEC = 90
+PROBE_TIMEOUT_SEC = 90  # legacy; kept for CLI back-compat, no longer used
 STREAM_DELAY_SEC = 1.0
+SETTLE_SEC = 15  # probe + sleep before the main stream so Newton's KNN index loads
 
 
 # --- API Helpers ---
@@ -504,21 +505,27 @@ def run_optimizer(args):
                 args.data_columns, args.timestamp_column,
             )
 
-            # Open one persistent SSE connection for the whole session.
-            # Sleep briefly so the SSE GET actually establishes before we start
-            # sending data; otherwise early predictions can be lost.
+            # Open the persistent SSE consumer first so we don't miss any
+            # predictions Newton emits during warm-up.
             reader = SSEReader(sse_url, api_key)
             reader.start()
             time.sleep(2)
 
-            # NOTE: We deliberately do NOT send a probe-then-wait warm-up here.
-            # Empirically (see diagnose_w64.py / diagnose_w128.py), Newton needs
-            # *continuous* incoming data to begin firing predictions — it doesn't
-            # respond to a single probe window followed by silence. The probe
-            # warm-up worked accidentally at w32 (the burst was enough) but
-            # produced 0 predictions at w64+. Just stream all inference windows
-            # back-to-back; the first ~10-15 windows act as the warm-up and
-            # predictions start flowing around t+10-20s.
+            # Probe + settle: send one window of input to wake Newton up, then
+            # sleep long enough for the KNN index to finish building from the
+            # uploaded n-shot files. Skipping this drops F1 from ~85% to ~50%
+            # on the bundled drilling example because queries hit a half-built
+            # index. The previous probe + wait_for_first(90s) accomplished
+            # this incidentally; we make it explicit and shorter.
+            print(f"  Sending probe + settling for {SETTLE_SEC}s (KNN index)...")
+            probe_data = transpose_window(rows, offset, config["window_size"], args.data_columns)
+            stream_window(endpoint, api_key, session_id, probe_data, 0)
+            time.sleep(SETTLE_SEC)
+            reader.drain()  # discard probe's prediction if any
+
+            # Stream inference windows; ground truth queue pairs with
+            # predictions FIFO. Predictions arrive at ~1:1 with sends after a
+            # short per-session warm-up.
             print(f"  Streaming {WINDOWS_PER_CONFIG} windows...")
             predictions = []
             ground_truths = []
