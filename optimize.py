@@ -22,6 +22,7 @@ import csv
 import json
 import os
 import sys
+import threading
 import time
 from itertools import product
 from pathlib import Path
@@ -259,36 +260,94 @@ def destroy_session(endpoint, api_key, session_id):
 
 # --- SSE Consumer ---
 
-def collect_sse_results(sse_url, api_key, timeout_sec=10):
-    """Collect SSE results for a short period."""
-    results = []
-    try:
-        r = requests.get(sse_url, headers={"Authorization": f"Bearer {api_key}"}, stream=True, timeout=timeout_sec)
-        client = SSEClient(r)
+def _parse_response(response):
+    if isinstance(response, str):
+        return response
+    if isinstance(response, list) and response:
+        return response[0]
+    if isinstance(response, dict):
+        return (
+            response.get("class_name")
+            or response.get("label")
+            or response.get("prediction")
+            or str(response)
+        )
+    return None
+
+
+class SSEReader:
+    """Single persistent SSE consumer per session, run in a background thread.
+
+    Newton holds the SSE socket open silently for 60-90s during warm-up. A
+    short per-call read timeout fires before any data arrives, so we open
+    one connection, no read timeout, and buffer results for the main loop
+    to drain.
+    """
+
+    def __init__(self, sse_url, api_key):
+        self.sse_url = sse_url
+        self.api_key = api_key
+        self._lock = threading.Lock()
+        self._results = []
+        self._stopped = False
+        self._error = None
+        self._response = None
+        self._thread = threading.Thread(target=self._run, daemon=True)
+
+    def start(self):
+        self._thread.start()
+
+    def _run(self):
+        try:
+            self._response = requests.get(
+                self.sse_url,
+                headers={"Authorization": f"Bearer {self.api_key}"},
+                stream=True,
+                timeout=(10, None),  # 10s connect, no read timeout
+            )
+            client = SSEClient(self._response)
+            for event in client.events():
+                if self._stopped:
+                    break
+                try:
+                    data = json.loads(event.data)
+                    if data.get("type") == "inference.result":
+                        parsed = _parse_response(data.get("event_data", {}).get("response"))
+                        if parsed is not None:
+                            with self._lock:
+                                self._results.append(parsed)
+                except (json.JSONDecodeError, KeyError):
+                    pass
+        except Exception as e:
+            if not self._stopped:
+                self._error = e
+
+    def wait_for_first(self, timeout_sec):
+        """Block until first result arrives. Returns it, or None on timeout/error."""
         start = time.time()
-        for event in client.events():
-            if time.time() - start > timeout_sec:
-                break
+        while time.time() - start < timeout_sec:
+            with self._lock:
+                if self._results:
+                    return self._results[0]
+            if self._error:
+                return None
+            time.sleep(0.5)
+        return None
+
+    def drain(self):
+        """Pop and return all currently buffered results."""
+        with self._lock:
+            out = self._results[:]
+            self._results.clear()
+        return out
+
+    def stop(self):
+        self._stopped = True
+        if self._response is not None:
             try:
-                data = json.loads(event.data)
-                if data.get("type") == "inference.result":
-                    response = data.get("event_data", {}).get("response")
-                    if isinstance(response, str):
-                        results.append(response)
-                    elif isinstance(response, list):
-                        results.append(response[0])
-                    elif isinstance(response, dict):
-                        results.append(
-                            response.get("class_name")
-                            or response.get("label")
-                            or response.get("prediction")
-                            or str(response)
-                        )
-            except (json.JSONDecodeError, KeyError):
+                self._response.close()
+            except Exception:
                 pass
-    except Exception as e:
-        print(f"  SSE error: {e}", file=sys.stderr)
-    return results
 
 
 # --- Evaluation ---
@@ -376,6 +435,7 @@ def run_optimizer(args):
         offset, mix = find_mixed_offset(rows, args.label_column, class_names, config["window_size"])
         print(f"  Data offset: {offset} (mix: {mix*100:.1f}%)")
 
+        reader = None
         try:
             # Create session
             print("  Creating session...")
@@ -384,49 +444,56 @@ def run_optimizer(args):
                 args.data_columns, args.timestamp_column,
             )
 
-            # Send probe and wait for warm-up
+            # Open one persistent SSE connection for the whole session
+            reader = SSEReader(sse_url, api_key)
+            reader.start()
+
+            # Send probe and wait for first result (warm-up)
             print("  Warming up (probe)...")
             probe_data = transpose_window(rows, offset, config["window_size"], args.data_columns)
             stream_window(endpoint, api_key, session_id, probe_data, 0)
 
-            # Start SSE consumer in background and wait for first result
-            warmed_up = False
-            probe_start = time.time()
-            while time.time() - probe_start < PROBE_TIMEOUT_SEC:
-                probe_results = collect_sse_results(sse_url, api_key, timeout_sec=5)
-                if probe_results:
-                    warmed_up = True
-                    print(f"  Warm-up complete: {probe_results[0]}")
-                    break
-
-            if not warmed_up:
+            first = reader.wait_for_first(PROBE_TIMEOUT_SEC)
+            if first is None:
                 print(f"  Warm-up timed out after {PROBE_TIMEOUT_SEC}s")
+            else:
+                print(f"  Warm-up complete: {first}")
+                reader.drain()  # discard probe result
 
-            # Stream inference windows and collect results
+            # Stream inference windows; ground truth queue pairs with predictions FIFO
             print(f"  Streaming {WINDOWS_PER_CONFIG} windows...")
             predictions = []
             ground_truths = []
+            gt_queue = []
+
+            def absorb_results():
+                for result in reader.drain():
+                    if not gt_queue:
+                        break
+                    g = gt_queue.pop(0)
+                    if g is not None:
+                        predictions.append(result)
+                        ground_truths.append(g)
 
             for i in range(1, WINDOWS_PER_CONFIG + 1):
                 start = offset + i * config["window_size"]
                 if start + config["window_size"] > len(rows):
                     break
 
-                # Get ground truth
-                gt = get_window_ground_truth(rows, start, config["window_size"], args.label_column, class_names)
-
-                # Stream window
+                gt_queue.append(
+                    get_window_ground_truth(rows, start, config["window_size"], args.label_column, class_names)
+                )
                 sensor_data = transpose_window(rows, start, config["window_size"], args.data_columns)
                 stream_window(endpoint, api_key, session_id, sensor_data, i)
                 time.sleep(STREAM_DELAY_SEC)
+                absorb_results()
 
-                # Collect results periodically
-                if i % 5 == 0 or i == WINDOWS_PER_CONFIG:
-                    batch_results = collect_sse_results(sse_url, api_key, timeout_sec=3)
-                    for result in batch_results:
-                        if gt is not None:
-                            predictions.append(result)
-                            ground_truths.append(gt)
+            # Drain any trailing results
+            for _ in range(10):
+                if not gt_queue:
+                    break
+                time.sleep(1)
+                absorb_results()
 
             # Compute metrics
             if predictions:
@@ -459,6 +526,9 @@ def run_optimizer(args):
                 "scored_windows": 0,
                 "error": str(e),
             })
+        finally:
+            if reader is not None:
+                reader.stop()
 
         print()
 
