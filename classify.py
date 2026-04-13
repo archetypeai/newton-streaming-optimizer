@@ -201,12 +201,23 @@ def main():
             if i % 25 == 0:
                 print(f"  streamed {i:,} / {max_windows:,} windows ({len(predictions):,} predictions back)")
 
-        # Drain trailing results
-        for _ in range(20):
-            if not ts_queue:
-                break
+        # Drain trailing results. Cap scales with window_size since Newton
+        # takes longer to fire predictions at larger windows. Bail early on
+        # 5 consecutive silent seconds.
+        max_drain_sec = max(20, window_size)
+        no_new_streak = 0
+        prev_count = len(predictions)
+        deadline = time.time() + max_drain_sec
+        while time.time() < deadline and ts_queue:
             time.sleep(1)
             absorb()
+            if len(predictions) == prev_count:
+                no_new_streak += 1
+                if no_new_streak >= 5:
+                    break
+            else:
+                no_new_streak = 0
+                prev_count = len(predictions)
 
         print(f"\nReceived {len(predictions):,} predictions for {max_windows:,} streamed windows.")
 

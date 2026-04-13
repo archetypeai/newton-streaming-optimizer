@@ -546,12 +546,29 @@ def run_optimizer(args):
                 time.sleep(STREAM_DELAY_SEC)
                 absorb_results()
 
-            # Drain any trailing results
-            for _ in range(10):
-                if not gt_queue:
-                    break
+            # Drain trailing results. Larger windows take longer for Newton to
+            # warm up, so the cap scales with window_size. We also bail early
+            # when no new predictions have arrived for several seconds.
+            max_drain_sec = max(15, config["window_size"])
+            no_new_streak = 0
+            NO_NEW_BAIL = 5
+            prev_count = len(predictions)
+            deadline = time.time() + max_drain_sec
+            drain_started = time.time()
+            while time.time() < deadline and gt_queue:
                 time.sleep(1)
                 absorb_results()
+                if len(predictions) == prev_count:
+                    no_new_streak += 1
+                    if no_new_streak >= NO_NEW_BAIL:
+                        break
+                else:
+                    no_new_streak = 0
+                    prev_count = len(predictions)
+            drain_elapsed = time.time() - drain_started
+            if predictions:
+                print(f"  Drain: waited {drain_elapsed:.1f}s for trailing results "
+                      f"(cap {max_drain_sec}s, bail after {NO_NEW_BAIL}s silence)")
 
             # Compute metrics
             if predictions:
