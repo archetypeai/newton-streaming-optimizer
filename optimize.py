@@ -29,6 +29,12 @@ from pathlib import Path
 import requests
 from sseclient import SSEClient
 
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
 # --- Configuration ---
 
 API_VERSION = "v0.5"
