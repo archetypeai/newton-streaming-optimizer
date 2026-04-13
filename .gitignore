@@ -1,0 +1,7 @@
+.env
+__pycache__/
+*.pyc
+venv/
+myenv/
+optimizer_results.json
+best_config.json
